@@ -1,0 +1,6 @@
+fastapi==0.116.1
+uvicorn[standard]==0.35.0
+pydantic==2.11.7
+pillow==11.3.0
+pyserial==3.5
+pytest==8.4.2
