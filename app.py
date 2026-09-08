@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 from fastapi import FastAPI, Header, HTTPException, Query
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from capture_pipeline import capture_from_barcode_scan, capture_from_manual_entry, serialize_capture, to_apex_stop_demand, to_mercury_intake_payload
@@ -12,7 +14,8 @@ from manual_review import claim_review, enqueue_review, init_review_store, list_
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("ung.mercury")
 
-app = FastAPI(title="UNG-MERCURY", version="0.1.2")
+app = FastAPI(title="UNG-MERCURY", version="0.2.0")
+UI_PATH = Path(__file__).with_name("ui.html")
 
 @app.on_event("startup")
 def startup():
@@ -45,24 +48,13 @@ class ResolveIn(BaseModel):
     operator_id: str
     resolution: str = Field(min_length=1, max_length=500)
 
-@app.get("/")
+@app.get("/", include_in_schema=False)
 def root():
-    return {
-        "status": "online",
-        "service": "UNG-MERCURY",
-        "name": "Package Intake & Sorting",
-        "version": "0.1.2",
-        "health": "/health",
-        "readiness": "/ready",
-        "system": "/v1/system",
-        "api_docs": "/docs",
-        "capture": {"barcode": "/v1/captures/barcode", "manual": "/v1/captures/manual"},
-        "manual_review": "/v1/manual-review"
-    }
+    return FileResponse(UI_PATH, media_type="text/html")
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "UNG-MERCURY", "version": "0.1.2"}
+    return {"status": "ok", "service": "UNG-MERCURY", "version": "0.2.0"}
 
 @app.get("/ready")
 def ready():
@@ -79,7 +71,7 @@ def system():
     return {
         "system_id": "UNG-MERCURY",
         "domain": "package-intake-sorting",
-        "capabilities": ["barcode-capture", "manual-capture", "idempotency", "capture-provenance", "weight-validation", "manual-review-queue", "apex-demand-mapping", "structured-logging"],
+        "capabilities": ["barcode-capture", "manual-capture", "idempotency", "capture-provenance", "weight-validation", "manual-review-queue", "apex-demand-mapping", "structured-logging", "operator-ui"],
     }
 
 @app.post("/v1/captures/barcode", status_code=201)
@@ -92,20 +84,13 @@ def barcode_capture(body: BarcodeCaptureIn, idempotency_header: str | None = Hea
     except ValueError as exc:
         log.warning("barcode capture rejected: %s", exc)
         raise HTTPException(422, str(exc))
-
     cached = get_idempotent_response(capture.idempotency_key)
     if cached is not None:
         cached["duplicate"] = True
         log.info("barcode capture replay deduplicated idempotency_key=%s", capture.idempotency_key)
         return cached
-
     payload = serialize_capture(capture)
-    response = {
-        "capture": payload,
-        "mercury_intake": to_mercury_intake_payload(capture, capture.station_id, capture.operator_id),
-        "apex_demand": to_apex_stop_demand(capture),
-        "duplicate": False,
-    }
+    response = {"capture": payload,"mercury_intake": to_mercury_intake_payload(capture, capture.station_id, capture.operator_id),"apex_demand": to_apex_stop_demand(capture),"duplicate": False}
     stored = store_idempotent_response(capture.idempotency_key, response)
     stored["duplicate"] = stored.get("capture", {}).get("capture_id") != capture.capture_id
     log.info("barcode capture accepted capture_id=%s station=%s operator=%s duplicate=%s", capture.capture_id, capture.station_id, capture.operator_id, stored["duplicate"])
@@ -121,13 +106,11 @@ def manual_capture(body: ManualCaptureIn, idempotency_header: str | None = Heade
     except ValueError as exc:
         log.warning("manual capture rejected: %s", exc)
         raise HTTPException(422, str(exc))
-
     cached = get_idempotent_response(capture.idempotency_key)
     if cached is not None:
         cached["duplicate"] = True
         log.info("manual capture replay deduplicated idempotency_key=%s", capture.idempotency_key)
         return cached
-
     payload = serialize_capture(capture)
     review = enqueue_review(payload, "manual_capture_requires_review")
     response = {"capture": payload, "manual_review": review, "apex_demand": to_apex_stop_demand(capture), "duplicate": False}
