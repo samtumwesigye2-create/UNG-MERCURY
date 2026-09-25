@@ -81,3 +81,7 @@ def review_resolve(review_id:str,body:ResolveIn):
     row=resolve_review(review_id,body.operator_id,body.resolution)
     if not row: raise HTTPException(404,"review_not_found")
     return row
+
+
+from scm_runtime import router as scm_runtime_router
+app.include_router(scm_runtime_router)
